@@ -250,9 +250,10 @@ export class Battle {
     if (enemies.length === 0) return;
     const target = this.pickHeroTarget(u, enemies);
     u.targetUid = target.uid;
-    const desired = Math.min(target.x - u.stats.range, u.homeX + HERO_ADVANCE);
-    this.moveToward(u, desired, dt, 0);
-    if (Math.abs(target.x - u.x) > u.stats.range + 0.01) return;
+    if (Math.abs(target.x - u.x) > u.stats.range + 0.01) {
+      this.moveToward(u, Math.min(target.x - u.stats.range, u.homeX + HERO_ADVANCE), dt, 0);
+      if (Math.abs(target.x - u.x) > u.stats.range + 0.01) return;
+    }
 
     for (const s of u.skills) {
       if (!this.ready(u, s)) continue;
