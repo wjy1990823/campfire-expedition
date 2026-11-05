@@ -1,5 +1,8 @@
 import { CLASSES } from '../data/classes';
+import { MAPS } from '../data/maps';
 import { MONSTERS } from '../data/monsters';
+import { INVENTORY_CAP, mapProgress, type GameState, type HeroRecord } from '../game/state';
+import { gearBonus, rollItem, rollRarity, salvageValue, type Item } from './items';
 import { Rng } from './rng';
 import type { BattleEvent, MapDef, Phase, SkillDef, Stats, Unit } from './types';
 
@@ -12,6 +15,8 @@ const CRIT_MULT = 1.5;
 const TAUNT_DURATION = 3;
 const BOSS_RETRY_KILLS = 10;
 const HERO_ADVANCE = 50;
+const DROP_CHANCE = 0.3;
+const CRIT_CAP = 0.6;
 const SPAWN_X = [410, 455, 500, 545];
 const HOME_X: Record<string, number> = { tank: 175, dps: 120, healer: 65 };
 
@@ -19,11 +24,47 @@ export function expToNext(level: number): number {
   return Math.round(50 * Math.pow(level, 1.8));
 }
 
-export function heroStats(classId: string, level: number): Stats {
+export function heroStats(classId: string, level: number, gear: (Item | undefined)[] = []): Stats {
   const c = CLASSES[classId];
   const s = { ...c.base };
   for (const [k, v] of Object.entries(c.growth) as [keyof Stats, number][]) s[k] += v * (level - 1);
+  for (const [k, v] of Object.entries(gearBonus(gear)) as [keyof Stats, number][]) s[k] += v;
+  s.maxHp = Math.round(s.maxHp);
+  s.crit = Math.min(CRIT_CAP, s.crit);
   return s;
+}
+
+export function recordStats(r: HeroRecord): Stats {
+  return heroStats(r.classId, r.level, Object.values(r.gear));
+}
+
+/** Exp multiplier when heroes out-level their prey, so a single map can't be farmed forever. */
+export function expPenalty(heroLevel: number, monsterLevel: number): number {
+  const diff = heroLevel - monsterLevel;
+  return diff <= 2 ? 1 : Math.max(0, 1 - 0.25 * (diff - 2));
+}
+
+/** Adds exp to a hero record, returning the number of levels gained. */
+export function addExp(r: HeroRecord, exp: number): number {
+  let gained = 0;
+  r.exp += exp;
+  while (r.exp >= expToNext(r.level)) {
+    r.exp -= expToNext(r.level);
+    r.level++;
+    gained++;
+  }
+  return gained;
+}
+
+/** Puts an item in the inventory, or salvages it for gold per the auto-salvage rule / full bag. */
+export function pickupItem(state: GameState, item: Item): { salvaged: boolean; gold: number } {
+  if (item.rarity < state.autoSalvageBelow || state.inventory.length >= INVENTORY_CAP) {
+    const gold = salvageValue(item);
+    state.gold += gold;
+    return { salvaged: true, gold };
+  }
+  state.inventory.push(item);
+  return { salvaged: false, gold: 0 };
 }
 
 export function monsterStats(monsterId: string, level: number): Stats {
@@ -36,30 +77,53 @@ export function mitigate(amount: number, armor: number): number {
   return amount * (100 / (100 + armor));
 }
 
-export interface HeroInit {
-  classId: string;
-  name: string;
-  level?: number;
-  exp?: number;
-}
-
 export class Battle {
   units: Unit[] = [];
   events: BattleEvent[] = [];
   phase: Phase = 'travel';
   phaseTimer = TRAVEL_TIME;
   wave = 0;
-  kills = 0;
-  gold = 0;
-  bossDefeated = false;
   bossWave = false;
   time = 0;
+  map: MapDef;
+  /** Totals since construction (used to extrapolate offline rewards). */
+  totals = { kills: 0, gold: 0, exp: 0, drops: 0 };
   private nextUid = 1;
   private rng: Rng;
 
-  constructor(public map: MapDef, heroes: HeroInit[], seed = Date.now()) {
+  constructor(public state: GameState, seed = Date.now()) {
     this.rng = new Rng(seed);
-    for (const h of heroes) this.addHero(h);
+    this.map = MAPS.find((m) => m.id === state.mapId) ?? MAPS[0];
+    state.heroes.forEach((_, i) => this.addHero(i));
+  }
+
+  get kills(): number {
+    return mapProgress(this.state, this.map.id).kills;
+  }
+  set kills(v: number) {
+    mapProgress(this.state, this.map.id).kills = v;
+  }
+  get bossDefeated(): boolean {
+    return mapProgress(this.state, this.map.id).bossDefeated;
+  }
+  set bossDefeated(v: boolean) {
+    mapProgress(this.state, this.map.id).bossDefeated = v;
+  }
+  get gold(): number {
+    return this.state.gold;
+  }
+
+  /** Re-applies level/gear stats to hero units, keeping their hp ratio. */
+  refreshHeroStats(): void {
+    for (const u of this.heroes) {
+      const r = this.state.heroes[u.record!];
+      const ratio = u.hp / u.stats.maxHp;
+      u.stats = recordStats(r);
+      u.level = r.level;
+      u.exp = r.exp;
+      if (u.alive) u.hp = Math.max(1, Math.round(u.stats.maxHp * ratio));
+      u.mana = Math.min(u.mana, u.stats.maxMana);
+    }
   }
 
   get heroes(): Unit[] {
@@ -82,16 +146,18 @@ export class Battle {
     return e;
   }
 
-  private addHero(h: HeroInit): Unit {
-    const c = CLASSES[h.classId];
-    const level = h.level ?? 1;
-    const stats = heroStats(c.id, level);
+  private addHero(index: number): Unit {
+    const r = this.state.heroes[index];
+    const c = CLASSES[r.classId];
+    const sameRole = this.state.heroes.slice(0, index).filter((h) => CLASSES[h.classId].role === c.role).length;
+    const homeX = HOME_X[c.role] - sameRole * 30;
     const u = this.makeUnit({
-      team: 'hero', defId: c.id, name: h.name, role: c.role, level, stats,
-      x: HOME_X[c.role] - 220, basicAttack: c.basicAttack, skills: c.skills, isBoss: false,
+      team: 'hero', defId: c.id, name: r.name, role: c.role, level: r.level, stats: recordStats(r),
+      x: homeX - 220, basicAttack: c.basicAttack, skills: c.skills, isBoss: false,
     });
-    u.homeX = HOME_X[c.role];
-    u.exp = h.exp ?? 0;
+    u.homeX = homeX;
+    u.exp = r.exp;
+    u.record = index;
     return u;
   }
 
@@ -379,10 +445,19 @@ export class Battle {
     const l = u.level - 1;
     const exp = Math.round(def.exp * (1 + 0.25 * l));
     const gold = Math.round(def.gold * (1 + 0.2 * l));
-    this.gold += gold;
+    this.state.gold += gold;
     this.kills++;
-    this.events.push({ type: 'loot', uid: u.uid, exp, gold });
-    for (const h of this.heroes) this.gainExp(h, exp);
+    this.totals.kills++;
+    this.totals.gold += gold;
+    this.totals.exp += exp;
+    const heroExp = (h: Unit) => Math.max(1, Math.round(exp * expPenalty(h.level, u.level)));
+    this.events.push({ type: 'loot', uid: u.uid, exp: heroExp(this.heroes[0]), gold });
+    for (const h of this.heroes) this.gainExp(h, heroExp(h));
+    if (u.isBoss || this.rng.next() < DROP_CHANCE) {
+      const item = rollItem(this.rng, this.state.nextItemId++, u.level, rollRarity(this.rng, u.isBoss));
+      this.totals.drops++;
+      this.events.push({ type: 'drop', uid: u.uid, item, ...pickupItem(this.state, item) });
+    }
     if (u.isBoss) {
       this.bossDefeated = true;
       this.events.push({ type: 'bossDefeated', mapId: this.map.id });
@@ -390,16 +465,17 @@ export class Battle {
   }
 
   private gainExp(h: Unit, exp: number): void {
-    h.exp += exp;
-    while (h.exp >= expToNext(h.level)) {
-      h.exp -= expToNext(h.level);
-      h.level++;
-      h.stats = heroStats(h.defId, h.level);
-      if (h.alive) {
-        h.hp = h.stats.maxHp;
-        h.mana = h.stats.maxMana;
-      }
-      this.events.push({ type: 'levelUp', uid: h.uid, level: h.level });
+    const r = this.state.heroes[h.record!];
+    const from = r.level;
+    if (addExp(r, exp) === 0) {
+      h.exp = r.exp;
+      return;
     }
+    this.refreshHeroStats();
+    if (h.alive) {
+      h.hp = h.stats.maxHp;
+      h.mana = h.stats.maxMana;
+    }
+    for (let l = from + 1; l <= r.level; l++) this.events.push({ type: 'levelUp', uid: h.uid, level: l });
   }
 }

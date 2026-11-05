@@ -102,6 +102,12 @@ function humanoid(l: LookDef): Grid {
       rect(g, 12, 7, 12, 12, WOOD);
       rect(g, 11, 4, 13, 6, '#f7c948');
       break;
+    case 'bow':
+      rect(g, 13, 4, 13, 12, WOOD);
+      px(g, 12, 3, WOOD);
+      px(g, 12, 13, WOOD);
+      rect(g, 12, 5, 12, 11, '#c2c3c7');
+      break;
     case 'dagger':
       rect(g, 12, 7, 12, 9, METAL);
       px(g, 12, 10, WOOD);
