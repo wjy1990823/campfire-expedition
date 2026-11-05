@@ -106,3 +106,10 @@ canvas {
   border: 1px solid #333c57;
   font-size: 11px;
 }
+
+.panel button:disabled {
+  opacity: 0.45;
+}
+.talent.locked {
+  opacity: 0.55;
+}

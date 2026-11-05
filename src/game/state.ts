@@ -11,7 +11,26 @@ export interface HeroRecord {
   level: number;
   exp: number;
   gear: Partial<Record<Slot, Item>>;
+  talents: Record<string, number>;
+  tactics: Tactics;
+  /** Personality line of recruited AI adventurers. */
+  quote?: string;
 }
+
+export interface Tactics {
+  /** Healers: heal allies below this hp ratio (null = class default). */
+  healThreshold: number | null;
+  disabled: string[];
+}
+
+export interface DungeonProgress {
+  day: string;
+  used: number;
+  clears: number;
+}
+
+export const DUNGEON_DAILY = 3;
+export const BENCH_CAP = 10;
 
 export interface MapProgress {
   kills: number;
@@ -21,6 +40,8 @@ export interface MapProgress {
 export interface GameState {
   version: 1;
   heroes: HeroRecord[];
+  bench: HeroRecord[];
+  dungeon: DungeonProgress;
   gold: number;
   inventory: Item[];
   mapId: string;
@@ -40,10 +61,39 @@ export const STARTING_HEROES: [string, string][] = [
   ['priest', '莉娜'],
 ];
 
+export function newHero(classId: string, name: string, level = 1): HeroRecord {
+  return { classId, name, level, exp: 0, gear: {}, talents: {}, tactics: { healThreshold: null, disabled: [] } };
+}
+
+export function today(now = Date.now()): string {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+/** Daily dungeon attempts left, resetting the counter on a new local day. */
+export function dungeonLeft(s: GameState, now = Date.now()): number {
+  const d = today(now);
+  if (s.dungeon.day !== d) s.dungeon = { day: d, used: 0, clears: s.dungeon.clears };
+  return DUNGEON_DAILY - s.dungeon.used;
+}
+
+/** Fills fields added after a save was created. */
+function migrate(s: GameState): GameState {
+  s.bench ??= [];
+  s.dungeon ??= { day: '', used: 0, clears: 0 };
+  for (const h of [...s.heroes, ...s.bench]) {
+    h.talents ??= {};
+    h.tactics ??= { healThreshold: null, disabled: [] };
+  }
+  return s;
+}
+
 export function newGame(now = Date.now()): GameState {
   return {
     version: 1,
-    heroes: STARTING_HEROES.map(([classId, name]) => ({ classId, name, level: 1, exp: 0, gear: {} })),
+    heroes: STARTING_HEROES.map(([classId, name]) => newHero(classId, name)),
+    bench: [],
+    dungeon: { day: '', used: 0, clears: 0 },
     gold: 0,
     inventory: [],
     mapId: MAPS[0].id,
@@ -53,6 +103,11 @@ export function newGame(now = Date.now()): GameState {
     nextItemId: 1,
     lastSeen: now,
   };
+}
+
+export function mapUnlocked(s: GameState, mapId: string): boolean {
+  const i = MAPS.findIndex((m) => m.id === mapId);
+  return i === 0 || (i > 0 && !!s.maps[MAPS[i - 1].id]?.bossDefeated);
 }
 
 export function mapProgress(s: GameState, mapId = s.mapId): MapProgress {
@@ -71,7 +126,7 @@ export function serialize(s: GameState): string {
 export function deserialize(raw: string): GameState | null {
   try {
     const v = JSON.parse(raw);
-    return isGameState(v) ? v : null;
+    return isGameState(v) ? migrate(v) : null;
   } catch {
     return null;
   }

@@ -1,9 +1,11 @@
 import { CLASSES } from '../data/classes';
-import { MAPS } from '../data/maps';
+import type { DungeonDef } from '../data/dungeons';
+import { mapById } from '../data/maps';
 import { MONSTERS } from '../data/monsters';
 import { INVENTORY_CAP, mapProgress, type GameState, type HeroRecord } from '../game/state';
 import { gearBonus, rollItem, rollRarity, salvageValue, type Item } from './items';
 import { Rng } from './rng';
+import { applyTalentStats, heroSkills } from './talents';
 import type { BattleEvent, MapDef, Phase, SkillDef, Stats, Unit } from './types';
 
 export const TICK = 0.1;
@@ -35,7 +37,10 @@ export function heroStats(classId: string, level: number, gear: (Item | undefine
 }
 
 export function recordStats(r: HeroRecord): Stats {
-  return heroStats(r.classId, r.level, Object.values(r.gear));
+  const s = applyTalentStats(heroStats(r.classId, r.level, Object.values(r.gear)), r);
+  s.maxHp = Math.round(s.maxHp);
+  s.crit = Math.min(CRIT_CAP, s.crit);
+  return s;
 }
 
 /** Exp multiplier when heroes out-level their prey, so a single map can't be farmed forever. */
@@ -91,23 +96,32 @@ export class Battle {
   private nextUid = 1;
   private rng: Rng;
 
-  constructor(public state: GameState, seed = Date.now()) {
+  /** Dungeon run: index of the current stage, and the outcome once finished. */
+  stage = 0;
+  result: 'cleared' | 'failed' | null = null;
+  private dungeonLevel = 1;
+
+  constructor(public state: GameState, seed = Date.now(), public dungeon?: DungeonDef) {
     this.rng = new Rng(seed);
-    this.map = MAPS.find((m) => m.id === state.mapId) ?? MAPS[0];
+    this.map = mapById(state.mapId);
+    if (dungeon) {
+      this.map = { ...this.map, id: dungeon.id, name: dungeon.name, theme: dungeon.theme, monsters: [], killsForBoss: dungeon.stages.length };
+    }
     state.heroes.forEach((_, i) => this.addHero(i));
+    if (dungeon) this.dungeonLevel = Math.max(dungeon.minLevel, this.avgHeroLevel());
   }
 
   get kills(): number {
-    return mapProgress(this.state, this.map.id).kills;
+    return this.dungeon ? this.stage : mapProgress(this.state, this.map.id).kills;
   }
   set kills(v: number) {
-    mapProgress(this.state, this.map.id).kills = v;
+    if (!this.dungeon) mapProgress(this.state, this.map.id).kills = v;
   }
   get bossDefeated(): boolean {
-    return mapProgress(this.state, this.map.id).bossDefeated;
+    return !this.dungeon && mapProgress(this.state, this.map.id).bossDefeated;
   }
   set bossDefeated(v: boolean) {
-    mapProgress(this.state, this.map.id).bossDefeated = v;
+    if (!this.dungeon) mapProgress(this.state, this.map.id).bossDefeated = v;
   }
   get gold(): number {
     return this.state.gold;
@@ -119,6 +133,7 @@ export class Battle {
       const r = this.state.heroes[u.record!];
       const ratio = u.hp / u.stats.maxHp;
       u.stats = recordStats(r);
+      u.skills = heroSkills(r);
       u.level = r.level;
       u.exp = r.exp;
       if (u.alive) u.hp = Math.max(1, Math.round(u.stats.maxHp * ratio));
@@ -153,7 +168,7 @@ export class Battle {
     const homeX = HOME_X[c.role] - sameRole * 30;
     const u = this.makeUnit({
       team: 'hero', defId: c.id, name: r.name, role: c.role, level: r.level, stats: recordStats(r),
-      x: homeX - 220, basicAttack: c.basicAttack, skills: c.skills, isBoss: false,
+      x: homeX - 220, basicAttack: c.basicAttack, skills: heroSkills(r), isBoss: false,
     });
     u.homeX = homeX;
     u.exp = r.exp;
@@ -177,8 +192,26 @@ export class Battle {
     return Math.round(h.reduce((a, u) => a + u.level, 0) / h.length);
   }
 
+  private spawnEnemy(id: string, level: number, x: number, isBoss: boolean): void {
+    const def = MONSTERS[id];
+    this.makeUnit({
+      team: 'enemy', defId: def.id, name: def.name, role: 'dps', level, stats: monsterStats(def.id, level),
+      x, basicAttack: def.basicAttack, skills: def.skills, isBoss,
+    });
+  }
+
+  private spawnDungeonStage(d: DungeonDef): void {
+    const st = d.stages[this.stage];
+    const lv = this.dungeonLevel;
+    this.bossWave = !!st.boss;
+    if (st.boss) this.spawnEnemy(st.boss, lv + 1, SPAWN_X[0], true);
+    else for (let i = 0; i < 4; i++) this.spawnEnemy(this.rng.pick(st.monsters!), lv, SPAWN_X[i % SPAWN_X.length] + this.rng.range(-10, 10), false);
+    this.events.push({ type: 'waveStart', wave: this.stage + 1, boss: this.bossWave, bossId: st.boss });
+  }
+
   private spawnWave(): void {
     this.wave++;
+    if (this.dungeon) return this.spawnDungeonStage(this.dungeon);
     const bossReady = !this.bossDefeated && this.kills >= this.map.killsForBoss;
     this.bossWave = bossReady;
     const clampLv = (l: number) => Math.max(this.map.minLevel, Math.min(this.map.maxLevel, l));
@@ -200,10 +233,11 @@ export class Battle {
         });
       }
     }
-    this.events.push({ type: 'waveStart', wave: this.wave, boss: bossReady });
+    this.events.push({ type: 'waveStart', wave: this.wave, boss: bossReady, bossId: bossReady ? this.map.boss : undefined });
   }
 
   tick(dt = TICK): void {
+    if (this.phase === 'done') return;
     this.time += dt;
     if (this.phase === 'travel') {
       this.phaseTimer -= dt;
@@ -235,7 +269,16 @@ export class Battle {
 
     const aliveEnemies = this.enemies.filter((e) => e.alive);
     const aliveHeroes = this.heroes.filter((h) => h.alive);
-    if (aliveHeroes.length === 0) {
+    if (aliveHeroes.length === 0 && this.dungeon) {
+      this.finishDungeon(false);
+    } else if (aliveEnemies.length === 0 && this.dungeon) {
+      this.clearEnemies();
+      if (++this.stage >= this.dungeon.stages.length) this.finishDungeon(true);
+      else {
+        this.phase = 'travel';
+        this.phaseTimer = TRAVEL_TIME;
+      }
+    } else if (aliveHeroes.length === 0) {
       if (this.bossWave) this.kills = Math.max(0, this.map.killsForBoss - BOSS_RETRY_KILLS);
       this.phase = 'wipe';
       this.phaseTimer = WIPE_TIME;
@@ -245,6 +288,13 @@ export class Battle {
       this.phase = 'travel';
       this.phaseTimer = TRAVEL_TIME;
     }
+  }
+
+  private finishDungeon(cleared: boolean): void {
+    this.result = cleared ? 'cleared' : 'failed';
+    this.phase = 'done';
+    if (cleared) this.state.dungeon.clears++;
+    this.events.push({ type: 'dungeonEnd', cleared });
   }
 
   private clearEnemies(): void {
@@ -393,6 +443,12 @@ export class Battle {
     if (!this.moveToward(u, target.x, dt, u.stats.range)) return;
     for (const s of u.skills) {
       if (!this.ready(u, s)) continue;
+      if (s.kind === 'damage') {
+        this.spend(u, s);
+        this.events.push({ type: 'cast', src: u.uid, skill: s, targets: [target.uid] });
+        this.dealDamage(u, target, s);
+        return;
+      }
       if (s.kind === 'aoeDamage') {
         const heroes = this.heroes.filter((h) => h.alive);
         this.spend(u, s);
@@ -454,11 +510,15 @@ export class Battle {
     this.events.push({ type: 'loot', uid: u.uid, exp: heroExp(this.heroes[0]), gold });
     for (const h of this.heroes) this.gainExp(h, heroExp(h));
     if (u.isBoss || this.rng.next() < DROP_CHANCE) {
-      const item = rollItem(this.rng, this.state.nextItemId++, u.level, rollRarity(this.rng, u.isBoss));
+      let rarity = rollRarity(this.rng, u.isBoss);
+      const finalBoss = !!this.dungeon && this.stage === this.dungeon.stages.length - 1;
+      if (this.dungeon && u.isBoss) rarity = Math.max(rarity, finalBoss ? 4 : 3);
+      const item = rollItem(this.rng, this.state.nextItemId++, u.level, rarity);
+      if (this.dungeon && u.isBoss) item.name = `幽影·${item.name}`;
       this.totals.drops++;
       this.events.push({ type: 'drop', uid: u.uid, item, ...pickupItem(this.state, item) });
     }
-    if (u.isBoss) {
+    if (u.isBoss && !this.dungeon) {
       this.bossDefeated = true;
       this.events.push({ type: 'bossDefeated', mapId: this.map.id });
     }
