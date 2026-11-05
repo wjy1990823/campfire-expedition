@@ -17,6 +17,12 @@ describe('offline rewards & saves', () => {
     expect(r2.seconds).toBe(OFFLINE_CAP_SECONDS);
   });
 
+  it('over-levelling on one map is throttled', () => {
+    const s = newGame(0);
+    applyOfflineRewards(s, OFFLINE_CAP_SECONDS, 2);
+    for (const h of s.heroes) expect(h.level).toBeLessThanOrEqual(12);
+  });
+
   it('round-trips saves, including export codes with Chinese text', () => {
     const s = newGame(0);
     s.gold = 123;

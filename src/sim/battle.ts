@@ -38,6 +38,12 @@ export function recordStats(r: HeroRecord): Stats {
   return heroStats(r.classId, r.level, Object.values(r.gear));
 }
 
+/** Exp multiplier when heroes out-level their prey, so a single map can't be farmed forever. */
+export function expPenalty(heroLevel: number, monsterLevel: number): number {
+  const diff = heroLevel - monsterLevel;
+  return diff <= 2 ? 1 : Math.max(0, 1 - 0.25 * (diff - 2));
+}
+
 /** Adds exp to a hero record, returning the number of levels gained. */
 export function addExp(r: HeroRecord, exp: number): number {
   let gained = 0;
@@ -444,8 +450,9 @@ export class Battle {
     this.totals.kills++;
     this.totals.gold += gold;
     this.totals.exp += exp;
-    this.events.push({ type: 'loot', uid: u.uid, exp, gold });
-    for (const h of this.heroes) this.gainExp(h, exp);
+    const heroExp = (h: Unit) => Math.max(1, Math.round(exp * expPenalty(h.level, u.level)));
+    this.events.push({ type: 'loot', uid: u.uid, exp: heroExp(this.heroes[0]), gold });
+    for (const h of this.heroes) this.gainExp(h, heroExp(h));
     if (u.isBoss || this.rng.next() < DROP_CHANCE) {
       const item = rollItem(this.rng, this.state.nextItemId++, u.level, rollRarity(this.rng, u.isBoss));
       this.totals.drops++;

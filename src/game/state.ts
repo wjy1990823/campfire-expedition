@@ -48,7 +48,7 @@ export function newGame(now = Date.now()): GameState {
     inventory: [],
     mapId: MAPS[0].id,
     maps: {},
-    autoSalvageBelow: 1,
+    autoSalvageBelow: 2,
     speed: 1,
     nextItemId: 1,
     lastSeen: now,

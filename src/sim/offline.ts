@@ -1,12 +1,13 @@
 import { MAPS } from '../data/maps';
 import { mapProgress, OFFLINE_CAP_SECONDS, type GameState } from '../game/state';
-import { addExp, Battle, pickupItem, TICK } from './battle';
+import { addExp, Battle, expPenalty, pickupItem, TICK } from './battle';
 import { rollItem, rollRarity, type Item } from './items';
 import { Rng } from './rng';
 
 export const OFFLINE_MIN_SECONDS = 60;
 const SAMPLE_SECONDS = 600;
 const MAX_OFFLINE_DROPS = 120;
+const EXP_CHUNKS = 24;
 
 export interface OfflineReport {
   seconds: number;
@@ -43,11 +44,13 @@ export function applyOfflineRewards(state: GameState, seconds: number, seed = Da
   };
   state.gold += report.gold;
   mapProgress(state).kills += report.kills;
+  const map = MAPS.find((m) => m.id === state.mapId) ?? MAPS[0];
+  const monsterLevel = Math.round((map.minLevel + map.maxLevel) / 2);
   for (const h of state.heroes) {
     const from = h.level;
-    if (addExp(h, report.exp) > 0) report.levelUps.push({ name: h.name, from, to: h.level });
+    for (let i = 0; i < EXP_CHUNKS; i++) addExp(h, Math.round((report.exp / EXP_CHUNKS) * expPenalty(h.level, monsterLevel)));
+    if (h.level > from) report.levelUps.push({ name: h.name, from, to: h.level });
   }
-  const map = MAPS.find((m) => m.id === state.mapId) ?? MAPS[0];
   const avgLevel = Math.round(state.heroes.reduce((a, h) => a + h.level, 0) / state.heroes.length);
   const ilvl = Math.max(map.minLevel, Math.min(map.maxLevel, avgLevel));
   const rng = new Rng(seed ^ 0x5bd1e995);
