@@ -68,6 +68,7 @@ export interface MonsterDef {
 
 export interface MapDef {
   id: string;
+  region: number;
   name: string;
   minLevel: number;
   maxLevel: number;
@@ -113,9 +114,10 @@ export type BattleEvent =
   | { type: 'loot'; uid: number; exp: number; gold: number }
   | { type: 'drop'; uid: number; item: Item; salvaged: boolean; gold: number }
   | { type: 'levelUp'; uid: number; level: number }
-  | { type: 'waveStart'; wave: number; boss: boolean }
+  | { type: 'waveStart'; wave: number; boss: boolean; bossId?: string }
+  | { type: 'dungeonEnd'; cleared: boolean }
   | { type: 'bossDefeated'; mapId: string }
   | { type: 'wipe' }
   | { type: 'revive' };
 
-export type Phase = 'travel' | 'fight' | 'wipe';
+export type Phase = 'travel' | 'fight' | 'wipe' | 'done';

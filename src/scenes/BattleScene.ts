@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
 import { buildLayer, buildSprite, SPRITE_SIZE } from '../art/sprites';
 import { CLASSES } from '../data/classes';
+import { DUNGEONS } from '../data/dungeons';
+import { MAPS } from '../data/maps';
 import { MONSTERS } from '../data/monsters';
 import { loadGame, newGame, saveGame, type GameState } from '../game/state';
 import { Battle, expToNext, TICK } from '../sim/battle';
-import { RARITIES } from '../sim/items';
+import { RARITIES, type Item } from '../sim/items';
 import { applyOfflineRewards } from '../sim/offline';
 import * as panels from '../ui/panels';
 import type { BattleEvent, Unit } from '../sim/types';
@@ -19,6 +21,7 @@ const PIXEL = 3;
 const FONT = '"Zpix", "PingFang SC", "Microsoft YaHei", monospace';
 const MAX_LOG = 6;
 const AUTOSAVE_MS = 10_000;
+let listenersBound = false;
 const FRAME_H = 30;
 
 interface UnitView {
@@ -63,26 +66,53 @@ export class BattleScene extends Phaser.Scene {
     super('battle');
   }
 
-  create(): void {
+  create(data: { dungeon?: string } = {}): void {
+    this.views = new Map();
+    this.frames = [];
+    this.logLines = [];
+    this.layers = [];
+    this.log = [];
+    this.acc = 0;
+    this.dungeonLoot = [];
+    this.bossId = '';
     this.cameras.main.setZoom(ZOOM).centerOn(W / 2, H / 2);
     this.state = loadGame() ?? newGame();
     const offline = applyOfflineRewards(this.state, (Date.now() - this.state.lastSeen) / 1000);
     this.speed = this.state.speed || 1;
-    this.battle = new Battle(this.state);
+    const dungeon = DUNGEONS.find((d) => d.id === data.dungeon);
+    this.battle = new Battle(this.state, Date.now(), dungeon);
     const map = this.battle.map;
     saveGame(this.state);
     if (offline) panels.openOfflineReport(offline);
     this.time.addEvent({ delay: AUTOSAVE_MS, loop: true, callback: () => saveGame(this.state) });
-    const flush = () => saveGame(this.state);
-    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && flush());
-    window.addEventListener('pagehide', flush);
+    if (!listenersBound) {
+      listenersBound = true;
+      const flush = () => saveGame(this.state);
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && flush());
+      window.addEventListener('pagehide', flush);
+    }
 
-    for (const c of Object.values(CLASSES)) this.textures.addCanvas(`u_${c.id}`, buildSprite(c.look));
-    for (const m of Object.values(MONSTERS)) this.textures.addCanvas(`u_${m.id}`, buildSprite(m.look));
+    for (const c of Object.values(CLASSES)) this.canvasTex(`u_${c.id}`, buildSprite(c.look));
+    for (const m of Object.values(MONSTERS)) this.canvasTex(`u_${m.id}`, buildSprite(m.look));
 
     this.buildBackground();
     this.buildHud();
-    this.addLog(`小队抵达【${map.name}】，点燃篝火，开始巡逻。`, '#f7c948');
+    if (dungeon) this.addLog(`小队进入【${dungeon.name}】，共 ${dungeon.stages.length} 关。`, '#b45cff');
+    else this.addLog(`小队抵达【${map.name}】，点燃篝火，开始巡逻。`, '#f7c948');
+  }
+
+  private dungeonLoot: Item[] = [];
+  private bossId = '';
+
+  private canvasTex(key: string, c: HTMLCanvasElement): void {
+    if (this.textures.exists(key)) this.textures.remove(key);
+    this.textures.addCanvas(key, c);
+  }
+
+  private restartBattle(dungeonId?: string): void {
+    panels.close();
+    saveGame(this.state);
+    this.scene.restart({ dungeon: dungeonId });
   }
 
   private buildBackground(): void {
@@ -98,7 +128,7 @@ export class BattleScene extends Phaser.Scene {
       sky.fillRect(0, BATTLE_TOP + i * bandH, W, bandH + 1);
     }
     const mk = (key: string, canvas: HTMLCanvasElement, y: number, speed: number) => {
-      this.textures.addCanvas(key, canvas);
+      this.canvasTex(key, canvas);
       const ts = this.add.tileSprite(0, y, W, canvas.height * PIXEL, key).setOrigin(0, 0).setTileScale(PIXEL);
       this.layers.push({ ts, speed });
     };
@@ -113,7 +143,7 @@ export class BattleScene extends Phaser.Scene {
     g.fillStyle(0x1a1c2c).fillRect(0, BATTLE_BOTTOM, W, H - BATTLE_BOTTOM);
     g.lineStyle(2, 0x5d4a3a).strokeRect(1, 1, W - 2, BATTLE_TOP - 2);
     txt(this, 8, 6, '篝火远征队', 13, '#f7c948').setDepth(901);
-    txt(this, 8, 23, `${this.battle.map.name}  Lv${this.battle.map.minLevel}-${this.battle.map.maxLevel}`, 9, '#a7f070').setDepth(901);
+    txt(this, 8, 23, `${this.battle.map.name}  ${this.battle.dungeon ? '5人副本' : `Lv${this.battle.map.minLevel}-${this.battle.map.maxLevel}`}`, 9, '#a7f070').setDepth(901);
     this.goldText = txt(this, W - 8, 8, '金币 0', 11, '#f7c948').setOrigin(1, 0).setDepth(901);
 
     const sb = this.add.rectangle(W - 26, BATTLE_TOP + 14, 36, 18, 0x262b44).setStrokeStyle(1, 0xf7c948).setDepth(901);
@@ -153,14 +183,16 @@ export class BattleScene extends Phaser.Scene {
     const tabs = ['小队', '背包', '天赋', '地图', '副本', '更多'];
     const tw = W / tabs.length;
     tabs.forEach((name, i) => {
-      const r = this.add.rectangle(i * tw, H - 40, tw, 40, i < 2 || i === 5 ? 0x3b5dc9 : 0x262b44).setOrigin(0, 0).setStrokeStyle(1, 0x1a1c2c).setDepth(901);
-      txt(this, i * tw + tw / 2, H - 20, name, 11, i < 2 || i === 5 ? '#f4f4f4' : '#94b0c2').setOrigin(0.5).setDepth(902);
+      const r = this.add.rectangle(i * tw, H - 40, tw, 40, 0x3b5dc9).setOrigin(0, 0).setStrokeStyle(1, 0x1a1c2c).setDepth(901);
+      txt(this, i * tw + tw / 2, H - 20, name, 11, '#f4f4f4').setOrigin(0.5).setDepth(902);
       r.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
         const ctx = this.panelCtx();
         if (name === '小队') panels.openTeam(ctx);
         else if (name === '背包') panels.openBag(ctx);
-        else if (name === '更多') panels.openSettings(ctx);
-        else this.banner(`【${name}】将在后续版本开放`, '#94b0c2', 1200);
+        else if (name === '天赋') panels.openTalents(ctx);
+        else if (name === '地图') panels.openMaps(ctx);
+        else if (name === '副本') panels.openDungeon(ctx);
+        else panels.openSettings(ctx);
       });
     });
   }
@@ -176,6 +208,7 @@ export class BattleScene extends Phaser.Scene {
         if (s) saveGame(s);
         window.location.reload();
       },
+      restart: (id) => this.restartBattle(id),
     };
   }
 
@@ -212,7 +245,13 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.goldText.setText(`金币 ${b.gold}`);
-    if (b.bossDefeated) {
+    if (b.dungeon) {
+      const n = b.dungeon.stages.length;
+      this.progressBar.width = (W - 20) * Math.min(1, b.stage / n);
+      this.progressBar.fillColor = 0xb45cff;
+      const boss = b.bossWave && this.bossId ? ` · 首领：${MONSTERS[this.bossId].name}` : '';
+      this.progressText.setText(b.result ? (b.result === 'cleared' ? '副本通关！' : '挑战失败') : `第 ${Math.min(b.stage + 1, n)}/${n} 关${boss}`);
+    } else if (b.bossDefeated) {
       this.progressBar.width = W - 20;
       this.progressBar.fillColor = 0xf7c948;
       this.progressText.setText(`灯塔篝火已点燃 · 击杀 ${b.kills}`);
@@ -317,7 +356,7 @@ export class BattleScene extends Phaser.Scene {
         if (!tgt || !v) break;
         const color = tgt.team === 'hero' ? '#ff5f5f' : e.crit ? '#f7c948' : '#f4f4f4';
         this.float(e.tgt, e.crit ? `${e.amount}!` : `${e.amount}`, color, e.crit ? 14 : 10);
-        v.sprite.setTintFill(0xffffff);
+        v.sprite.setTint(0xff9999);
         this.time.delayedCall(70, () => v.sprite.active && v.sprite.clearTint());
         break;
       }
@@ -344,6 +383,7 @@ export class BattleScene extends Phaser.Scene {
       }
       case 'drop': {
         const r = RARITIES[e.item.rarity];
+        if (this.battle.dungeon && !e.salvaged) this.dungeonLoot.push(e.item);
         if (e.salvaged) this.addLog(`拾取 [${r.name}]${e.item.name}，自动分解 +${e.gold}金`, '#8b93a8');
         else {
           this.float(e.uid, e.item.name, r.color, 9);
@@ -363,14 +403,32 @@ export class BattleScene extends Phaser.Scene {
         break;
       }
       case 'waveStart':
-        if (e.boss) {
-          this.banner(`灯塔守护者【${MONSTERS[b.map.boss].name}】出现了！`, '#ff6688');
+        this.bossId = e.bossId ?? '';
+        if (e.boss && b.dungeon) {
+          this.banner(`首领【${MONSTERS[this.bossId].name}】挡住了去路！`, '#ff6688');
+          this.addLog(`第 ${e.wave} 关：首领 ${MONSTERS[this.bossId].name}`, '#ff6688');
+        } else if (b.dungeon) this.addLog(`第 ${e.wave} 关：黑雾中的爪牙`, '#b45cff');
+        else if (e.boss) {
+          this.banner(`灯塔守护者【${MONSTERS[this.bossId].name}】出现了！`, '#ff6688');
           this.addLog(`黑雾凝聚……灯塔守护者现身！`, '#ff6688');
         }
         break;
       case 'bossDefeated':
         this.banner('灯塔篝火已点燃！', '#f7c948', 2400);
         this.addLog(`击败守护者，${b.map.name}的灯塔篝火重新燃起！`, '#f7c948');
+        {
+          const next = MAPS[MAPS.findIndex((m) => m.id === b.map.id) + 1];
+          if (next) this.addLog(`新地图解锁：【${next.name}】（底部“地图”前往）`, '#a7f070');
+        }
+        saveGame(this.state);
+        break;
+      case 'dungeonEnd':
+        saveGame(this.state);
+        this.banner(e.cleared ? '副本通关！' : '小队力竭，撤离副本', e.cleared ? '#f7c948' : '#ff5f5f', 2000);
+        this.addLog(e.cleared ? `${b.map.name} 通关！` : `${b.map.name} 挑战失败。`, e.cleared ? '#f7c948' : '#ff5f5f');
+        this.time.delayedCall(1500, () =>
+          panels.openDungeonResult(e.cleared, b.map.name, this.dungeonLoot, () => this.restartBattle()),
+        );
         break;
       case 'wipe':
         this.banner('小队全灭……回到篝火休整', '#ff5f5f');

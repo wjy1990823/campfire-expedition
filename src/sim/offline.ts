@@ -1,4 +1,4 @@
-import { MAPS } from '../data/maps';
+import { mapById } from '../data/maps';
 import { mapProgress, OFFLINE_CAP_SECONDS, type GameState } from '../game/state';
 import { addExp, Battle, expPenalty, pickupItem, TICK } from './battle';
 import { rollItem, rollRarity, type Item } from './items';
@@ -44,7 +44,7 @@ export function applyOfflineRewards(state: GameState, seconds: number, seed = Da
   };
   state.gold += report.gold;
   mapProgress(state).kills += report.kills;
-  const map = MAPS.find((m) => m.id === state.mapId) ?? MAPS[0];
+  const map = mapById(state.mapId);
   const monsterLevel = Math.round((map.minLevel + map.maxLevel) / 2);
   for (const h of state.heroes) {
     const from = h.level;
