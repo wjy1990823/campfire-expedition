@@ -1,9 +1,12 @@
 import Phaser from 'phaser';
 import { buildLayer, buildSprite, SPRITE_SIZE } from '../art/sprites';
-import { CLASSES, STARTING_PARTY } from '../data/classes';
-import { MAPS } from '../data/maps';
+import { CLASSES } from '../data/classes';
 import { MONSTERS } from '../data/monsters';
+import { loadGame, newGame, saveGame, type GameState } from '../game/state';
 import { Battle, expToNext, TICK } from '../sim/battle';
+import { RARITIES } from '../sim/items';
+import { applyOfflineRewards } from '../sim/offline';
+import * as panels from '../ui/panels';
 import type { BattleEvent, Unit } from '../sim/types';
 
 const W = 360;
@@ -14,8 +17,9 @@ const BATTLE_TOP = 40;
 const BATTLE_BOTTOM = 300;
 const PIXEL = 3;
 const FONT = '"Zpix", "PingFang SC", "Microsoft YaHei", monospace';
-const STARTING_NAMES = ['布伦', '艾拉', '莉娜'];
-const MAX_LOG = 8;
+const MAX_LOG = 6;
+const AUTOSAVE_MS = 10_000;
+const FRAME_H = 30;
 
 interface UnitView {
   root: Phaser.GameObjects.Container;
@@ -42,6 +46,7 @@ function txt(scene: Phaser.Scene, x: number, y: number, s: string, size = 10, co
 
 export class BattleScene extends Phaser.Scene {
   private battle!: Battle;
+  private state!: GameState;
   private views = new Map<number, UnitView>();
   private frames: PartyFrame[] = [];
   private logLines: Phaser.GameObjects.Text[] = [];
@@ -60,8 +65,17 @@ export class BattleScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setZoom(ZOOM).centerOn(W / 2, H / 2);
-    const map = MAPS[0];
-    this.battle = new Battle(map, STARTING_PARTY.map((c, i) => ({ classId: c, name: STARTING_NAMES[i] })));
+    this.state = loadGame() ?? newGame();
+    const offline = applyOfflineRewards(this.state, (Date.now() - this.state.lastSeen) / 1000);
+    this.speed = this.state.speed || 1;
+    this.battle = new Battle(this.state);
+    const map = this.battle.map;
+    saveGame(this.state);
+    if (offline) panels.openOfflineReport(offline);
+    this.time.addEvent({ delay: AUTOSAVE_MS, loop: true, callback: () => saveGame(this.state) });
+    const flush = () => saveGame(this.state);
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && flush());
+    window.addEventListener('pagehide', flush);
 
     for (const c of Object.values(CLASSES)) this.textures.addCanvas(`u_${c.id}`, buildSprite(c.look));
     for (const m of Object.values(MONSTERS)) this.textures.addCanvas(`u_${m.id}`, buildSprite(m.look));
@@ -103,9 +117,10 @@ export class BattleScene extends Phaser.Scene {
     this.goldText = txt(this, W - 8, 8, '金币 0', 11, '#f7c948').setOrigin(1, 0).setDepth(901);
 
     const sb = this.add.rectangle(W - 26, BATTLE_TOP + 14, 36, 18, 0x262b44).setStrokeStyle(1, 0xf7c948).setDepth(901);
-    this.speedText = txt(this, W - 26, BATTLE_TOP + 14, '1x', 10, '#f7c948').setOrigin(0.5).setDepth(902);
+    this.speedText = txt(this, W - 26, BATTLE_TOP + 14, `${this.speed}x`, 10, '#f7c948').setOrigin(0.5).setDepth(902);
     sb.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
       this.speed = this.speed === 1 ? 2 : this.speed === 2 ? 4 : 1;
+      this.state.speed = this.speed;
       this.speedText.setText(`${this.speed}x`);
     });
 
@@ -114,23 +129,23 @@ export class BattleScene extends Phaser.Scene {
     this.progressBar = this.add.rectangle(10, py, 0, 12, 0xef7d57).setOrigin(0, 0).setDepth(902);
     this.progressText = txt(this, W / 2, py + 6, '', 9).setOrigin(0.5).setDepth(903);
 
-    const fy = BATTLE_BOTTOM + 26;
+    const fy = BATTLE_BOTTOM + 24;
     this.battle.heroes.forEach((h, i) => {
-      const y = fy + i * 38;
-      this.add.rectangle(8, y, W - 16, 34, 0x262b44).setOrigin(0, 0).setStrokeStyle(1, 0x3e4766).setDepth(901);
-      const icon = this.add.image(26, y + 17, `u_${h.defId}`).setScale(2).setDepth(902);
+      const y = fy + i * FRAME_H;
+      this.add.rectangle(8, y, W - 16, FRAME_H - 3, 0x262b44).setOrigin(0, 0).setStrokeStyle(1, 0x3e4766).setDepth(901);
+      const icon = this.add.image(24, y + 13, `u_${h.defId}`).setScale(1.5).setDepth(902);
       icon.setCrop(0, 0, SPRITE_SIZE, SPRITE_SIZE);
-      const label = txt(this, 44, y + 3, '', 9).setDepth(902);
-      this.add.rectangle(44, y + 16, 200, 7, 0x5d275d).setOrigin(0, 0).setDepth(902);
-      const hp = this.add.rectangle(44, y + 16, 200, 7, 0x38b764).setOrigin(0, 0).setDepth(903);
-      const hpText = txt(this, 250, y + 13, '', 8).setDepth(903);
-      this.add.rectangle(44, y + 25, 200, 4, 0x29366f).setOrigin(0, 0).setDepth(902).setVisible(h.stats.maxMana > 0);
-      const mp = this.add.rectangle(44, y + 25, 200, 4, 0x41a6f6).setOrigin(0, 0).setDepth(903);
-      const exp = this.add.rectangle(8, y + 33, 0, 1, 0xf7c948).setOrigin(0, 0).setDepth(903);
+      const label = txt(this, 40, y + 1, '', 8).setDepth(902);
+      this.add.rectangle(40, y + 13, 200, 6, 0x5d275d).setOrigin(0, 0).setDepth(902);
+      const hp = this.add.rectangle(40, y + 13, 200, 6, 0x38b764).setOrigin(0, 0).setDepth(903);
+      const hpText = txt(this, 246, y + 10, '', 8).setDepth(903);
+      this.add.rectangle(40, y + 21, 200, 3, 0x29366f).setOrigin(0, 0).setDepth(902).setVisible(h.stats.maxMana > 0);
+      const mp = this.add.rectangle(40, y + 21, 200, 3, 0x41a6f6).setOrigin(0, 0).setDepth(903);
+      const exp = this.add.rectangle(8, y + FRAME_H - 4, 0, 1, 0xf7c948).setOrigin(0, 0).setDepth(903);
       this.frames.push({ label, hp, hpText, mp, exp });
     });
 
-    const ly = fy + this.battle.heroes.length * 38 + 6;
+    const ly = fy + this.battle.heroes.length * FRAME_H + 3;
     this.add.rectangle(8, ly, W - 16, MAX_LOG * 14 + 22, 0x14151f).setOrigin(0, 0).setStrokeStyle(1, 0x3e4766).setDepth(901);
     txt(this, 14, ly + 3, '冒险日志', 9, '#94b0c2').setDepth(902);
     for (let i = 0; i < MAX_LOG; i++) this.logLines.push(txt(this, 14, ly + 18 + i * 14, '', 9).setDepth(902));
@@ -138,12 +153,30 @@ export class BattleScene extends Phaser.Scene {
     const tabs = ['小队', '背包', '天赋', '地图', '副本', '更多'];
     const tw = W / tabs.length;
     tabs.forEach((name, i) => {
-      const r = this.add.rectangle(i * tw, H - 40, tw, 40, i === 0 ? 0x3b5dc9 : 0x262b44).setOrigin(0, 0).setStrokeStyle(1, 0x1a1c2c).setDepth(901);
-      txt(this, i * tw + tw / 2, H - 20, name, 11, i === 0 ? '#f4f4f4' : '#94b0c2').setOrigin(0.5).setDepth(902);
+      const r = this.add.rectangle(i * tw, H - 40, tw, 40, i < 2 || i === 5 ? 0x3b5dc9 : 0x262b44).setOrigin(0, 0).setStrokeStyle(1, 0x1a1c2c).setDepth(901);
+      txt(this, i * tw + tw / 2, H - 20, name, 11, i < 2 || i === 5 ? '#f4f4f4' : '#94b0c2').setOrigin(0.5).setDepth(902);
       r.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
-        if (i !== 0) this.banner(`【${name}】将在第二阶段开放`, '#94b0c2', 1200);
+        const ctx = this.panelCtx();
+        if (name === '小队') panels.openTeam(ctx);
+        else if (name === '背包') panels.openBag(ctx);
+        else if (name === '更多') panels.openSettings(ctx);
+        else this.banner(`【${name}】将在后续版本开放`, '#94b0c2', 1200);
       });
     });
+  }
+
+  private panelCtx(): panels.PanelCtx {
+    return {
+      state: this.state,
+      changed: () => {
+        this.battle.refreshHeroStats();
+        saveGame(this.state);
+      },
+      replace: (s) => {
+        if (s) saveGame(s);
+        window.location.reload();
+      },
+    };
   }
 
   update(_t: number, delta: number): void {
@@ -307,6 +340,15 @@ export class BattleScene extends Phaser.Scene {
         const u = b.unit(e.uid);
         this.float(e.uid, `+${e.gold}金`, '#f7c948', 9);
         if (u) this.addLog(`击败 ${u.name}(Lv${u.level})，经验 +${e.exp}，金币 +${e.gold}`, '#c2c3c7');
+        break;
+      }
+      case 'drop': {
+        const r = RARITIES[e.item.rarity];
+        if (e.salvaged) this.addLog(`拾取 [${r.name}]${e.item.name}，自动分解 +${e.gold}金`, '#8b93a8');
+        else {
+          this.float(e.uid, e.item.name, r.color, 9);
+          this.addLog(`获得 [${r.name}]${e.item.name}`, r.color);
+        }
         break;
       }
       case 'levelUp': {

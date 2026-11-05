@@ -1,3 +1,5 @@
+import type { Item } from './items';
+
 export type Team = 'hero' | 'enemy';
 export type Role = 'tank' | 'healer' | 'dps';
 
@@ -35,7 +37,7 @@ export interface LookDef {
   primary: string;
   secondary: string;
   headgear?: 'helmet' | 'hood' | 'hat' | 'hair' | 'ears';
-  weapon?: 'sword' | 'staff' | 'dagger' | 'mace';
+  weapon?: 'sword' | 'staff' | 'dagger' | 'mace' | 'bow';
   shield?: boolean;
   robe?: boolean;
   eye?: string;
@@ -98,6 +100,7 @@ export interface Unit {
   basicAttack: SkillDef;
   skills: SkillDef[];
   exp: number;
+  record?: number;
 }
 
 export type BattleEvent =
@@ -108,6 +111,7 @@ export type BattleEvent =
   | { type: 'heal'; src: number; tgt: number; amount: number; crit: boolean; skill: SkillDef }
   | { type: 'death'; uid: number }
   | { type: 'loot'; uid: number; exp: number; gold: number }
+  | { type: 'drop'; uid: number; item: Item; salvaged: boolean; gold: number }
   | { type: 'levelUp'; uid: number; level: number }
   | { type: 'waveStart'; wave: number; boss: boolean }
   | { type: 'bossDefeated'; mapId: string }

@@ -41,6 +41,30 @@ export const CLASSES: Record<string, ClassDef> = {
     ],
     look: { kind: 'humanoid', skin: '#f4c197', primary: '#3b5dc9', secondary: '#73eff7', headgear: 'hat', weapon: 'staff', robe: true },
   },
+  hunter: {
+    id: 'hunter',
+    name: '荒野猎人',
+    role: 'dps',
+    base: { maxHp: 130, maxMana: 100, atk: 12, armor: 16, crit: 0.1, attackInterval: 1.5, range: 170, moveSpeed: 70, manaRegen: 3 },
+    growth: { maxHp: 16, maxMana: 8, atk: 2.2, armor: 2, manaRegen: 0.2 },
+    basicAttack: { id: 'h_basic', name: '射击', kind: 'damage', cooldown: 0, manaCost: 0, power: 1, ranged: true },
+    skills: [
+      { id: 'h_volley', name: '乱射', kind: 'aoeDamage', cooldown: 10, manaCost: 30, power: 1.1, ranged: true },
+      { id: 'h_aimed', name: '瞄准射击', kind: 'damage', cooldown: 6, manaCost: 15, power: 2.4, ranged: true },
+    ],
+    look: { kind: 'humanoid', skin: '#e0a878', hair: '#7a4b2a', primary: '#38704b', secondary: '#a7f070', headgear: 'hood', weapon: 'bow' },
+  },
+  rogue: {
+    id: 'rogue',
+    name: '影刃盗贼',
+    role: 'dps',
+    base: { maxHp: 140, maxMana: 100, atk: 13, armor: 18, crit: 0.18, attackInterval: 1.1, range: 36, moveSpeed: 85, manaRegen: 6 },
+    growth: { maxHp: 18, maxMana: 6, atk: 2.3, armor: 2.2, manaRegen: 0.2 },
+    basicAttack: { id: 'r_basic', name: '刺击', kind: 'damage', cooldown: 0, manaCost: 0, power: 0.9 },
+    skills: [
+      { id: 'r_fan', name: '刀扇', kind: 'aoeDamage', cooldown: 9, manaCost: 30, power: 0.9 },
+      { id: 'r_eviscerate', name: '剔骨', kind: 'damage', cooldown: 5, manaCost: 20, power: 2.3 },
+    ],
+    look: { kind: 'humanoid', skin: '#f4c197', primary: '#333c57', secondary: '#b13e53', headgear: 'hood', weapon: 'dagger' },
+  },
 };
-
-export const STARTING_PARTY = ['guardian', 'mage', 'priest'] as const;

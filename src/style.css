@@ -12,3 +12,97 @@ body {
 canvas {
   image-rendering: pixelated;
 }
+.panel-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 20, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  z-index: 10;
+  font-family: 'Zpix', 'PingFang SC', 'Microsoft YaHei', monospace;
+  color: #f4f4f4;
+}
+.panel {
+  width: min(100vw, 56.25vh);
+  height: 78vh;
+  background: #1a1c2c;
+  border: 3px solid #5d4a3a;
+  box-shadow: inset 0 0 0 2px #262b44;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: #262b44;
+  color: #f7c948;
+}
+.panel-body {
+  overflow-y: auto;
+  padding: 8px;
+  flex: 1;
+}
+.card {
+  background: #262b44;
+  border: 2px solid #333c57;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+.card summary {
+  cursor: pointer;
+}
+.row {
+  padding: 3px 0;
+  border-top: 1px dashed #333c57;
+}
+.stats {
+  color: #94b0c2;
+}
+.muted {
+  color: #6b7a99;
+}
+.btns,
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.toolbar {
+  margin: 0 0 8px;
+}
+.panel button,
+.panel select {
+  font: inherit;
+  font-size: 12px;
+  background: #333c57;
+  color: #f4f4f4;
+  border: 2px solid #5d6b8a;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.panel button.up {
+  border-color: #38b764;
+  color: #a7f070;
+}
+.panel button.down {
+  color: #8b93a8;
+}
+.panel button.danger {
+  border-color: #b13e53;
+  color: #ff8b8b;
+}
+.panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  height: 60px;
+  margin: 4px 0;
+  background: #14151f;
+  color: #c2c3c7;
+  border: 1px solid #333c57;
+  font-size: 11px;
+}
